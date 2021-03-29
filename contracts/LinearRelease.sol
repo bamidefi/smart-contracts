@@ -25,7 +25,7 @@ contract LinearRelease is Ownable, ReentrancyGuard {
   mapping(address => uint256) private _lastUnlockBlock;
 
   modifier onlyChefBami() {
-    require(msg.sender == address(chefBami), "linear release: only fair launch");
+    require(msg.sender == address(chefBami), "linear release: only chef bami");
     _;
   }
 
@@ -79,7 +79,7 @@ contract LinearRelease is Ownable, ReentrancyGuard {
       amount = _locks[_user];
     }
     // When block number is more than startReleaseBlock but less than endReleaseBlock,
-    // some ALPACAs can be released
+    // some BAMIs can be released
     else
     {
       uint256 releasedBlock = block.number.sub(_lastUnlockBlock[_user]);

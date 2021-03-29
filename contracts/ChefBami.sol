@@ -33,10 +33,9 @@ contract ChefBami is Ownable, ReentrancyGuard {
         //
         // Whenever a user deposits or withdraws LP tokens to a pool. Here's what happens:
         //   1. The pool's `accBamiPerShare` (and `lastRewardBlock`) gets updated.
-        //   2. User receives the pending reward sent to his/her address.
-        //   3. User's `amount` gets updated.
-        //   4. User's `rewardDebt` gets updated.
-        //   5. User's `fundedBy` updated by User address
+        //   2. User's `amount` gets updated.
+        //   3. User's `rewardDebt` gets updated.
+        //   4. User's `fundedBy` updated by User address
     }
 
     // Info of each pool.
@@ -229,7 +228,7 @@ contract ChefBami is Ownable, ReentrancyGuard {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
         updatePool(_pid);
-        // Update: we don't want to return the depsoit right now since it's being locked out
+        // Update: we don't want to return the deposit right now since it's being locked out in locker contract
         if (_amount > 0) {
             pool.lpToken.safeTransferFrom(
                 address(msg.sender),
