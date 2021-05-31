@@ -17,7 +17,7 @@ module.exports = function (deployer) {
       BamiToken.address,
       "0x4542b1c810FD07d78ac9e0850ef8FD36555095e8", // Dev Address
       "0x4542b1c810FD07d78ac9e0850ef8FD36555095e8", // Fee Address
-      1, // BAMI token per block
+      32, // BAMI token per block
       0 // Start block doesn't matter here, maybe remove soon?
     );
   });

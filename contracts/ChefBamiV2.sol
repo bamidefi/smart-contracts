@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 
 pragma solidity 0.6.12;
-
+pragma experimental ABIEncoderV2;
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "./libs/IBEP20.sol";
 import "./libs/SafeBEP20.sol";
 import "./libs/ILocker.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./libs/IChefBami.sol";
 
 import "./BamiToken.sol";
 
@@ -16,7 +17,7 @@ import "./BamiToken.sol";
 // This is a reattempt to make a new Masterchef who named BAMI Chef and will make BAMI
 // for all of us
 // God bless this contract
-contract ChefBami is Ownable, ReentrancyGuard {
+contract ChefBamiV2 is Ownable, ReentrancyGuard {
     using SafeMath for uint256;
     using SafeBEP20 for IBEP20;
 
@@ -49,18 +50,17 @@ contract ChefBami is Ownable, ReentrancyGuard {
     }
 
     // The BAMI TOKEN!
-    IBEP20 public bami;
+    BamiToken public bami;
     // Dev address.
     address public devaddr;
-    // BAMI tokens created per block.
-    uint256 public bamiPerBlock;
+
     // Bonus muliplier for early bami makers.
     uint256 public constant BONUS_MULTIPLIER = 1;
     // Deposit Fee address
     address public feeAddress;
 
-    // Vault address
-    address public vaultAddress;
+    IChefBami public immutable CHEF_BAMI_V1;
+    uint256 public immutable MASTER_PID;
 
     // Info of each pool.
     PoolInfo[] public poolInfo;
@@ -70,6 +70,7 @@ contract ChefBami is Ownable, ReentrancyGuard {
     uint256 public totalAllocPoint = 0;
     // The block number when BAMI mining starts.
     uint256 public startBlock;
+    IBEP20 public dummyToken;
 
     event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
@@ -81,23 +82,31 @@ contract ChefBami is Ownable, ReentrancyGuard {
     );
     event SetFeeAddress(address indexed user, address indexed newAddress);
     event SetDevAddress(address indexed user, address indexed newAddress);
-    event SetVaultAddress(address indexed user, address indexed newAddress);
-    event UpdateEmissionRate(address indexed user, uint256 goosePerBlock);
+    event LogUpdatePool(uint256 indexed pid, uint256 lastRewardBlock, uint256 lpSupply, uint256 accBamiPerShare);
+    event LogInit();
+
+    modifier harvestFromChefBamiV1() {
+        CHEF_BAMI_V1.deposit(MASTER_PID, 0);
+        _;
+    }
 
     constructor(
         BamiToken _bami,
-        address _devaddr,
-        address _feeAddress,
-        address _vaultAddress,
-        uint256 _bamiPerBlock,
-        uint256 _startBlock
+        IChefBami _chefBami,
+        uint256 _master_pid
     ) public {
         bami = _bami;
-        devaddr = _devaddr;
-        feeAddress = _feeAddress;
-        vaultAddress = _vaultAddress;
-        bamiPerBlock = _bamiPerBlock;
-        startBlock = _startBlock;
+        CHEF_BAMI_V1 = _chefBami;
+        MASTER_PID = _master_pid;
+    }
+
+    function init(IBEP20 _dummyToken) external onlyOwner {
+        dummyToken = _dummyToken;
+        uint256 balance = dummyToken.balanceOf(msg.sender);
+        dummyToken.safeTransferFrom(msg.sender, address(this), balance);
+        dummyToken.safeApprove(address(CHEF_BAMI_V1), balance);
+        CHEF_BAMI_V1.deposit(MASTER_PID, balance);
+        emit LogInit();
     }
 
     function poolLength() external view returns (uint256) {
@@ -173,6 +182,12 @@ contract ChefBami is Ownable, ReentrancyGuard {
         return _to.sub(_from).mul(BONUS_MULTIPLIER);
     }
 
+      /// @notice calculates the `amount` of BAMI per block
+    function bamiPerBlock() public view returns (uint256 amount) {
+        amount = uint256(CHEF_BAMI_V1.bamiPerBlock())
+            .mul(CHEF_BAMI_V1.poolInfo(MASTER_PID).allocPoint) / CHEF_BAMI_V1.totalAllocPoint();
+    }
+
     // View function to see pending BAMIs on frontend.
     function pendingBami(uint256 _pid, address _user)
         external
@@ -187,7 +202,7 @@ contract ChefBami is Ownable, ReentrancyGuard {
             uint256 multiplier =
                 getMultiplier(pool.lastRewardBlock, block.number);
             uint256 bamiReward =
-                multiplier.mul(bamiPerBlock).mul(pool.allocPoint).div(
+                multiplier.mul(bamiPerBlock()).mul(pool.allocPoint).div(
                     totalAllocPoint
                 );
             accBamiPerShare = accBamiPerShare.add(
@@ -206,37 +221,26 @@ contract ChefBami is Ownable, ReentrancyGuard {
     }
 
     // Update reward variables of the given pool to be up-to-date.
-    function updatePool(uint256 _pid) public {
-        PoolInfo storage pool = poolInfo[_pid];
-        if (block.number <= pool.lastRewardBlock) {
-            return;
-        }
-        uint256 lpSupply = pool.lpToken.balanceOf(address(this));
-        if (lpSupply == 0 || pool.allocPoint == 0) {
+    function updatePool(uint256 _pid) public harvestFromChefBamiV1 returns (PoolInfo memory pool) {
+        pool = poolInfo[_pid];
+        if (block.number > pool.lastRewardBlock) {
+            uint256 stakeTokenSupply = pool.lpToken.balanceOf(address(this));
+            if (stakeTokenSupply > 0 && totalAllocPoint > 0) {
+                uint256 blocks = block.number.sub(pool.lastRewardBlock);
+                uint256 bamiReward = blocks.mul(bamiPerBlock()).mul(pool.allocPoint).mul(1e12).div(totalAllocPoint);
+                pool.accBamiPerShare = pool.accBamiPerShare.add((bamiReward.div(stakeTokenSupply)));
+            }
             pool.lastRewardBlock = block.number;
-            return;
+            poolInfo[_pid] = pool;
+            emit LogUpdatePool(_pid, pool.lastRewardBlock, stakeTokenSupply, pool.accBamiPerShare);
         }
-        uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number);
-        uint256 bamiReward =
-            multiplier.mul(bamiPerBlock).mul(pool.allocPoint).div(
-                totalAllocPoint
-            );
-        // Transfer Bami from vault address
-        bami.safeTransferFrom(vaultAddress, devaddr, bamiReward.div(10));
-        bami.safeTransferFrom(vaultAddress, address(this), bamiReward);
-        pool.accBamiPerShare = pool.accBamiPerShare.add(
-            bamiReward.mul(1e12).div(lpSupply)
-        );
-        pool.lastRewardBlock = block.number;
     }
 
     // Deposit LP tokens to MasterChef for BAMI allocation.
-    function deposit(uint256 _pid, uint256 _amount) public nonReentrant {
-        PoolInfo storage pool = poolInfo[_pid];
+    function deposit(uint256 _pid, uint256 _amount) public harvestFromChefBamiV1 nonReentrant {
+        PoolInfo memory pool = updatePool(_pid);
         UserInfo storage user = userInfo[_pid][msg.sender];
-        updatePool(_pid);
-        // Harvest the remaining token before calculate new amount
-        _harvest(msg.sender, _pid);
+        // Update: we don't want to return the deposit right now since it's being locked out in locker contract
         if (_amount > 0) {
             pool.lpToken.safeTransferFrom(
                 address(msg.sender),
@@ -258,7 +262,7 @@ contract ChefBami is Ownable, ReentrancyGuard {
 
     // Withdraw LP tokens from MasterChef.
     function withdraw(uint256 _pid, uint256 _amount) public nonReentrant {
-        PoolInfo storage pool = poolInfo[_pid];
+        PoolInfo memory pool = updatePool(_pid);
         UserInfo storage user = userInfo[_pid][msg.sender];
         require(user.amount >= _amount, "withdraw: not good");
         require(user.fundedBy == msg.sender, "withdraw:: only funder");
@@ -284,7 +288,7 @@ contract ChefBami is Ownable, ReentrancyGuard {
     /// @param pid The index of the pool. See `poolInfo`.
     /// @param to Receiver of BAMI rewards.
     function _harvest(address to, uint256 pid)
-        internal
+        internal harvestFromChefBamiV1
     {
         PoolInfo memory pool = poolInfo[pid];
         UserInfo storage user = userInfo[pid][to];
@@ -352,18 +356,5 @@ contract ChefBami is Ownable, ReentrancyGuard {
         require(msg.sender == feeAddress, "setFeeAddress: FORBIDDEN");
         feeAddress = _feeAddress;
         emit SetFeeAddress(msg.sender, _feeAddress);
-    }
-
-    function setVaultAddress(address _vaultAddress) public {
-        require(msg.sender == devaddr, "setVaultAddress: only dev is allowed to set vault address");
-        vaultAddress = _vaultAddress;
-        emit SetVaultAddress(msg.sender, _vaultAddress);
-    }
-
-    //Pancake has to add hidden dummy pools inorder to alter the emission, here we make it simple and transparent to all.
-    function updateEmissionRate(uint256 _bamiPerBlock) public onlyOwner {
-        massUpdatePools();
-        bamiPerBlock = _bamiPerBlock;
-        emit UpdateEmissionRate(msg.sender, _bamiPerBlock);
     }
 }

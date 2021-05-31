@@ -39,4 +39,8 @@ module.exports = {
   compilers: {
     solc: { version: "0.6.12" },
   },
+  plugins: ["truffle-plugin-verify"],
+  api_keys: {
+    bscscan: "TD2I1TQ5A8QZIEIXFRQD2UTUF81QJMF52W",
+  },
 };
